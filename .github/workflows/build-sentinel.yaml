@@ -1,0 +1,87 @@
+name: Build Sentinel
+
+on:
+  workflow_dispatch:
+    inputs:
+      valkey_version:
+        description: "Valkey version to build (must match a vendored valkey-sentinel/<x.y>/debian-12 dir)"
+        required: true
+        default: "9.1.2"
+      platforms:
+        description: "Target platforms (comma-separated)"
+        required: true
+        default: "linux/amd64,linux/arm64"
+      push_latest:
+        description: "Also tag as :latest"
+        type: boolean
+        required: false
+        default: false
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout (this fork)
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute image, context dir and tags
+        id: meta
+        run: |
+          owner="${{ github.repository_owner }}"
+          image="${REGISTRY,,}/${owner,,}/valkey-sentinel"
+          ver="${{ inputs.valkey_version }}"
+          minor="$(echo "$ver" | cut -d. -f1,2)"
+          {
+            echo "image=${image}"
+            echo "context=./valkey-sentinel/${minor}/debian-12"
+            echo "tags<<EOF"
+            echo "${image}:${ver}"
+            if [ "${{ inputs.push_latest }}" = "true" ]; then echo "${image}:latest"; fi
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ steps.meta.outputs.context }}
+          file: ./Dockerfile.valkey-sentinel
+          platforms: ${{ inputs.platforms }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          cache-from: type=gha,scope=sentinel-${{ inputs.valkey_version }}
+          cache-to: type=gha,mode=max,scope=sentinel-${{ inputs.valkey_version }}
+
+      - name: Summary
+        run: |
+          {
+            echo "### Built Valkey Sentinel image"
+            echo ""
+            echo "**Version:** ${{ inputs.valkey_version }}"
+            echo "**Platforms:** ${{ inputs.platforms }}"
+            echo "**Context:** ${{ steps.meta.outputs.context }}"
+            echo ""
+            echo "Tags:"
+            echo '```'
+            echo "${{ steps.meta.outputs.tags }}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

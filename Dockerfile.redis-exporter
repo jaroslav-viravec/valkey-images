@@ -1,0 +1,50 @@
+# SPDX-License-Identifier: APACHE-2.0
+
+ARG BASE_IMAGE="docker.io/bitnami/minideb:bookworm"
+
+FROM ${BASE_IMAGE}
+
+ARG TARGETARCH
+
+LABEL org.opencontainers.image.base.name="docker.io/bitnami/minideb:bookworm" \
+      org.opencontainers.image.title="redis-exporter" \
+      org.opencontainers.image.version="1.92.1"
+
+ENV HOME="/" \
+    OS_ARCH="${TARGETARCH:-amd64}" \
+    OS_FLAVOUR="debian-12" \
+    OS_NAME="linux"
+
+COPY prebuildfs /
+SHELL ["/bin/bash", "-o", "errexit", "-o", "nounset", "-o", "pipefail", "-c"]
+# Install required system packages and dependencies
+RUN install_packages ca-certificates curl procps
+# Download + checksum-verify + extract the prebuilt Bitnami component. No compile.
+RUN mkdir -p /tmp/bitnami/pkg/cache/ ; cd /tmp/bitnami/pkg/cache/ || exit 1 ; \
+    COMPONENTS=( \
+      "redis-exporter-1.92.1-0-linux-${OS_ARCH}-debian-12" \
+    ) ; \
+    for COMPONENT in "${COMPONENTS[@]}"; do \
+      if [ ! -f "${COMPONENT}.tar.gz" ]; then \
+        curl -SsLf "https://downloads.bitnami.com/files/stacksmith/${COMPONENT}.tar.gz" -O ; \
+      fi ; \
+      sha256sum -c "/opt/bitnami/checksums/${COMPONENT}.tar.gz.sha256" ; \
+      tar -zxf "${COMPONENT}.tar.gz" -C /opt/bitnami --strip-components=2 --no-same-owner ; \
+      rm -rf "${COMPONENT}".tar.gz ; \
+    done ; \
+    rm -rf /opt/bitnami/checksums ;
+RUN apt-get update && apt-get upgrade -y && \
+    apt-get clean && rm -rf /var/lib/apt/lists /var/cache/apt/archives
+RUN chmod g+rwX /opt/bitnami
+RUN find / -perm /6000 -type f -exec chmod a-s {} \; || true
+RUN uninstall_packages curl
+
+ENV APP_VERSION="1.92.1" \
+    BITNAMI_APP_NAME="redis-exporter" \
+    PATH="/opt/bitnami/redis-exporter/bin:$PATH"
+
+EXPOSE 9121
+
+WORKDIR /opt/bitnami/redis-exporter
+USER 1001
+ENTRYPOINT [ "redis_exporter" ]

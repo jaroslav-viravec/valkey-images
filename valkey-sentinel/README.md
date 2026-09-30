@@ -1,0 +1,225 @@
+# Bitnami Secure Image for Valkey Sentinel
+
+> Valkey is a high-performance data structure server that primarily serves key/value workloads. It supports a wide range of native structures and an extensible plugin system for adding new data structures and access patterns.
+
+[Overview of Valkey Sentinel](https://valkey.io/)
+Trademarks: This software listing is packaged by Bitnami. The respective trademarks mentioned in the offering are owned by the respective companies, and use of them does not imply any affiliation or endorsement.
+
+## TL;DR
+
+```console
+docker run --name valkey-sentinel -e VALKEY_PRIMARY_HOST=valkey bitnami/valkey-sentinel:latest
+```
+
+## Why use Bitnami Secure Images?
+
+Those are hardened, minimal CVE images built and maintained by Bitnami. Bitnami Secure Images are based on the cloud-optimized, security-hardened enterprise [OS Photon Linux](https://vmware.github.io/photon/). Why choose BSI images?
+
+- Hardened secure images of popular open source software with Near-Zero Vulnerabilities
+- Vulnerability Triage & Prioritization with VEX Statements, KEV and EPSS Scores
+- Compliance focus with FIPS, STIG, and air-gap options, including secure bill of materials (SBOM)
+- Software supply chain provenance attestation through in-toto
+- First class support for the internet’s favorite Helm charts
+
+Each image comes with valuable security metadata. You can view the metadata in [our public catalog here](https://app-catalog.vmware.com/bitnami/apps). Note: Some data is only available with [commercial subscriptions to BSI](https://bitnami.com/).
+
+![Alt text](https://github.com/bitnami/containers/blob/main/BSI%20UI%201.png?raw=true "Application details")
+![Alt text](https://github.com/bitnami/containers/blob/main/BSI%20UI%202.png?raw=true "Packaging report")
+
+If you are looking for our previous generation of images based on Debian Linux, please see the [Bitnami Legacy registry](https://hub.docker.com/u/bitnamilegacy).
+
+## Why use a non-root container?
+
+Non-root container images add an extra layer of security and are generally recommended for production environments. However, because they run as a non-root user, privileged tasks are typically off-limits. Learn more about non-root containers [in our docs](https://techdocs.broadcom.com/us/en/vmware-tanzu/application-catalog/tanzu-application-catalog/services/tac-doc/apps-tutorials-work-with-non-root-containers-index.html).
+
+## Supported tags and respective `Dockerfile` links
+
+Learn more about the Bitnami tagging policy and the difference between rolling tags and immutable tags [in our documentation page](https://techdocs.broadcom.com/us/en/vmware-tanzu/application-catalog/tanzu-application-catalog/services/tac-doc/apps-tutorials-understand-rolling-tags-containers-index.html).
+
+## Get this image
+
+The Bitnami Valkey Sentinel Docker image is only available to [Bitnami Secure Images](https://bitnami.com) customers.
+
+## Connecting to other containers
+
+Using [Docker container networking](https://docs.docker.com/engine/userguide/networking/), a Valkey server running inside a container can easily be accessed by your application containers.
+
+Containers attached to the same network can communicate with each other using the container name as the hostname.
+
+### Using the Command Line
+
+In this example, we will create a Valkey Sentinel instance that will monitor a Valkey instance that is running on the same docker network.
+
+#### Step 1: Create a network
+
+```console
+docker network create app-tier --driver bridge
+```
+
+#### Step 2: Launch the Valkey instance
+
+Use the `--network app-tier` argument to the `docker run` command to attach the Valkey container to the `app-tier` network.
+
+```console
+docker run -d --name valkey-server \
+    -e ALLOW_EMPTY_PASSWORD=yes \
+    --network app-tier \
+    bitnami/valkey:latest
+```
+
+#### Step 3: Launch your Valkey Sentinel instance
+
+Finally we create a new container instance to launch the Valkey client and connect to the server created in the previous step:
+
+```console
+docker run -it --rm \
+    -e VALKEY_PRIMARY_HOST=valkey-server \
+    --network app-tier \
+    bitnami/valkey-sentinel:latest
+```
+
+## Configuration
+
+The following section describes the supported environment variables
+
+### Environment variables
+
+The following tables list the main variables you can set.
+
+#### Customizable environment variables
+
+| Name                                               | Description                                                            | Default Value                          |
+|----------------------------------------------------|------------------------------------------------------------------------|----------------------------------------|
+| `VALKEY_SENTINEL_DATA_DIR`                         | Valkey data directory                                                  | `${VALKEY_SENTINEL_VOLUME_DIR}/data`   |
+| `VALKEY_SENTINEL_DISABLE_COMMANDS`                 | Commands to disable in Valkey                                          | `nil`                                  |
+| `VALKEY_SENTINEL_DATABASE`                         | Default Valkey database                                                | `valkey`                               |
+| `VALKEY_SENTINEL_AOF_ENABLED`                      | Enable AOF                                                             | `yes`                                  |
+| `VALKEY_SENTINEL_HOST`                             | Valkey Sentinel host                                                   | `nil`                                  |
+| `VALKEY_SENTINEL_PRIMARY_NAME`                     | Valkey Sentinel primary name                                           | `nil`                                  |
+| `VALKEY_SENTINEL_PORT_NUMBER`                      | Valkey Sentinel host port                                              | `$VALKEY_SENTINEL_DEFAULT_PORT_NUMBER` |
+| `VALKEY_SENTINEL_QUORUM`                           | Minimum number of sentinel nodes in order to reach a failover decision | `2`                                    |
+| `VALKEY_SENTINEL_DOWN_AFTER_MILLISECONDS`          | Time (in milliseconds) to consider a node to be down                   | `60000`                                |
+| `VALKEY_SENTINEL_FAILOVER_TIMEOUT`                 | Specifies the failover timeout (in milliseconds)                       | `180000`                               |
+| `VALKEY_SENTINEL_PRIMARY_REBOOT_DOWN_AFTER_PERIOD` | Specifies the timeout (in milliseconds) for rebooting a primary        | `0`                                    |
+| `VALKEY_SENTINEL_RESOLVE_HOSTNAMES`                | Enables hostnames support                                              | `yes`                                  |
+| `VALKEY_SENTINEL_ANNOUNCE_HOSTNAMES`               | Announce hostnames                                                     | `no`                                   |
+| `ALLOW_EMPTY_PASSWORD`                             | Allow password-less access                                             | `no`                                   |
+| `VALKEY_SENTINEL_PASSWORD`                         | Password for Valkey                                                    | `nil`                                  |
+| `VALKEY_PRIMARY_USER`                              | Valkey primary node username                                           | `nil`                                  |
+| `VALKEY_PRIMARY_PASSWORD`                          | Valkey primary node password                                           | `nil`                                  |
+| `VALKEY_SENTINEL_ANNOUNCE_IP`                      | IP address used to gossip its presence                                 | `nil`                                  |
+| `VALKEY_SENTINEL_ANNOUNCE_PORT`                    | Port used to gossip its presence                                       | `nil`                                  |
+| `VALKEY_SENTINEL_TLS_ENABLED`                      | Enable TLS for Valkey authentication                                   | `no`                                   |
+| `VALKEY_SENTINEL_TLS_PORT_NUMBER`                  | Valkey TLS port (requires VALKEY_SENTINEL_ENABLE_TLS=yes)              | `26379`                                |
+| `VALKEY_SENTINEL_TLS_CERT_FILE`                    | Valkey TLS certificate file                                            | `nil`                                  |
+| `VALKEY_SENTINEL_TLS_KEY_FILE`                     | Valkey TLS key file                                                    | `nil`                                  |
+| `VALKEY_SENTINEL_TLS_CA_FILE`                      | Valkey TLS CA file                                                     | `nil`                                  |
+| `VALKEY_SENTINEL_TLS_DH_PARAMS_FILE`               | Valkey TLS DH parameter file                                           | `nil`                                  |
+| `VALKEY_SENTINEL_TLS_AUTH_CLIENTS`                 | Enable Valkey TLS client authentication                                | `yes`                                  |
+| `VALKEY_PRIMARY_HOST`                              | Valkey primary host (used by replicas)                                 | `valkey`                               |
+| `VALKEY_PRIMARY_PORT_NUMBER`                       | Valkey primary host port (used by replicas)                            | `6379`                                 |
+| `VALKEY_PRIMARY_SET`                               | Valkey sentinel primary set                                            | `myprimary`                            |
+
+#### Read-only environment variables
+
+| Name                                  | Description                            | Value                                            |
+|---------------------------------------|----------------------------------------|--------------------------------------------------|
+| `VALKEY_SENTINEL_VOLUME_DIR`          | Persistence base directory             | `/bitnami/valkey-sentinel`                       |
+| `VALKEY_SENTINEL_BASE_DIR`            | Valkey installation directory          | `${BITNAMI_ROOT_DIR}/valkey-sentinel`            |
+| `VALKEY_SENTINEL_CONF_DIR`            | Valkey configuration directory         | `${VALKEY_SENTINEL_BASE_DIR}/etc`                |
+| `VALKEY_SENTINEL_DEFAULT_CONF_DIR`    | Valkey default configuration directory | `${VALKEY_SENTINEL_BASE_DIR}/etc.default`        |
+| `VALKEY_SENTINEL_MOUNTED_CONF_DIR`    | Valkey mounted configuration directory | `${VALKEY_SENTINEL_BASE_DIR}/mounted-etc`        |
+| `VALKEY_SENTINEL_CONF_FILE`           | Valkey configuration file              | `${VALKEY_SENTINEL_CONF_DIR}/sentinel.conf`      |
+| `VALKEY_SENTINEL_LOG_DIR`             | Valkey logs directory                  | `${VALKEY_SENTINEL_BASE_DIR}/logs`               |
+| `VALKEY_SENTINEL_TMP_DIR`             | Valkey temporary directory             | `${VALKEY_SENTINEL_BASE_DIR}/tmp`                |
+| `VALKEY_SENTINEL_PID_FILE`            | Valkey PID file                        | `${VALKEY_SENTINEL_TMP_DIR}/valkey-sentinel.pid` |
+| `VALKEY_SENTINEL_BIN_DIR`             | Valkey executables directory           | `${VALKEY_SENTINEL_BASE_DIR}/bin`                |
+| `VALKEY_SENTINEL_DAEMON_USER`         | Valkey system user                     | `valkey`                                         |
+| `VALKEY_SENTINEL_DAEMON_GROUP`        | Valkey system group                    | `valkey`                                         |
+| `VALKEY_SENTINEL_DEFAULT_PORT_NUMBER` | Valkey Sentinel host port              | `26379`                                          |
+
+### Securing Valkey Sentinel traffic
+
+Valkey adds the support for SSL/TLS connections. Should you desire to enable this optional feature, you may use the aforementioned `VALKEY_SENTINEL_TLS_*` environment variables to configure the application.
+
+When enabling TLS, conventional standard traffic is disabled by default. However this new feature is not mutually exclusive, which means it is possible to listen to both TLS and non-TLS connection simultaneously. To enable non-TLS traffic, set `VALKEY_SENTINEL_PORT_NUMBER` to another port different than `0`.
+
+1. Using `docker run`
+
+    ```console
+    $ docker run --name valkey-sentinel \
+        -v /path/to/certs:/opt/bitnami/valkey/certs \
+        -v /path/to/valkey-sentinel/persistence:/bitnami \
+        -e VALKEY_PRIMARY_HOST=valkey \
+        -e VALKEY_SENTINEL_TLS_ENABLED=yes \
+        -e VALKEY_SENTINEL_TLS_CERT_FILE=/opt/bitnami/valkey/certs/valkey.crt \
+        -e VALKEY_SENTINEL_TLS_KEY_FILE=/opt/bitnami/valkey/certs/valkey.key \
+        -e VALKEY_SENTINEL_TLS_CA_FILE=/opt/bitnami/valkey/certs/valkeyCA.crt \
+        bitnami/valkey-cluster:latest
+        bitnami/valkey-sentinel:latest
+    ```
+
+Alternatively, you may also provide with this configuration in your [custom](https://github.com/bitnami/containers/blob/main/bitnami/valkey-sentinel#configuration-file) configuration file.
+
+### Configuration file
+
+The image looks for configurations in `/bitnami/valkey-sentinel/conf/`. You can mount a volume at `/bitnami` and copy/edit the configurations in the `/path/to/valkey-persistence/valkey-sentinel/conf/`. The default configurations will be populated to the `conf/` directory if it's empty.
+
+#### Step 1: Run the Valkey Sentinel image
+
+Run the Valkey Sentinel image, mounting a directory from your host.
+
+```console
+docker run --name valkey-sentinel \
+    -e VALKEY_PRIMARY_HOST=valkey \
+    -v /path/to/valkey-sentinel/persistence:/bitnami \
+    bitnami/valkey-sentinel:latest
+```
+
+#### Step 2: Edit the configuration
+
+Edit the configuration on your host using your favorite editor.
+
+```console
+vi /path/to/valkey-persistence/valkey-sentinel/conf/valkey.conf
+```
+
+#### Step 3: Restart Valkey
+
+After changing the configuration, restart your Valkey container for changes to take effect.
+
+```console
+docker restart valkey
+```
+
+### FIPS configuration in Bitnami Secure Images
+
+The Bitnami Valkey Sentinel Docker image from the [Bitnami Secure Images](https://go-vmware.broadcom.com/contact-us) catalog includes extra features and settings to configure the container with FIPS capabilities. You can configure the next environment variables:
+
+- `OPENSSL_FIPS`: whether OpenSSL runs in FIPS mode or not. `yes` (default), `no`.
+
+## Logging
+
+The Bitnami Valkey Sentinel Docker image sends the container logs to the `stdout`. You can configure the containers [logging driver](https://docs.docker.com/engine/admin/logging/overview/) using the `--log-driver` option if you wish to consume the container logs differently. In the default configuration docker uses the `json-file` driver.
+
+## Notable Changes
+
+### Starting October 20, 2024
+
+- All the references have been updated from `master/slave` to `primary/replica` to follow the upstream project strategy. Environment variables previously prefixed as `VALKEY_MASTER` or `VALKEY_SENTINEL_MASTER` use `VALKEY_PRIMARY` and `VALKEY_SENTINEL_PRIMARY` now.
+
+## License
+
+Copyright &copy; 2026 Broadcom. The term "Broadcom" refers to Broadcom Inc. and/or its subsidiaries.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+<http://www.apache.org/licenses/LICENSE-2.0>
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
