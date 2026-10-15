@@ -1,12 +1,19 @@
 name: Build Valkey
 
+# Builds the valkey image from the hand-maintained top-level Dockerfile.valkey, using
+# valkey/<minor>/debian-12 (kept current by the Sync Valkey workflow) as the build
+# context. The exact version is read from the vendored Dockerfile's image.version label
+# and passed to Dockerfile.valkey as the APP_VERSION build-arg, so nothing is hardcoded
+# here. Bitnami ships build sources only for the latest minor; older minors are README
+# stubs and cannot be built.
+
 on:
   workflow_dispatch:
     inputs:
-      valkey_version:
-        description: "Valkey version to build (must match a vendored valkey/<x.y>/debian-12 dir)"
-        required: true
-        default: "9.1.2"
+      valkey_minor:
+        description: "Vendored minor to build (valkey/<minor>/debian-12). Leave empty to build the latest vendored minor."
+        required: false
+        default: ""
       platforms:
         description: "Target platforms (comma-separated)"
         required: true
@@ -44,16 +51,36 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Compute image, context dir and tags
+      - name: Resolve minor, version, context and tags
         id: meta
         run: |
+          set -euo pipefail
           owner="${{ github.repository_owner }}"
           image="${REGISTRY,,}/${owner,,}/valkey"
-          ver="${{ inputs.valkey_version }}"
-          minor="$(echo "$ver" | cut -d. -f1,2)"
+          minor="${{ inputs.valkey_minor }}"
+          if [ -z "$minor" ]; then
+            # highest minor that actually ships build sources (not a README stub)
+            minor="$(find valkey -mindepth 2 -maxdepth 2 -type d -name debian-12 \
+              | sed -E 's#valkey/([^/]+)/debian-12#\1#' | sort -V | tail -1 || true)"
+          fi
+          if [ -z "$minor" ]; then
+            echo "::error::No vendored valkey sources found. Run the 'Sync Valkey sources' workflow first (Bitnami ships only the latest minor)."
+            exit 1
+          fi
+          context="valkey/${minor}/debian-12"
+          if [ ! -f "${context}/Dockerfile" ]; then
+            echo "::error::No vendored sources at ${context}/Dockerfile. Run the 'Sync Valkey sources' workflow first."
+            exit 1
+          fi
+          ver="$(grep -oE 'image\.version="[0-9][^"]*"' "${context}/Dockerfile" | head -1 | sed -E 's/.*="([^"]+)"/\1/')"
+          if [ -z "$ver" ]; then
+            echo "::error::Could not read image.version from ${context}/Dockerfile"
+            exit 1
+          fi
           {
-            echo "image=${image}"
-            echo "context=./valkey/${minor}/debian-12"
+            echo "minor=${minor}"
+            echo "version=${ver}"
+            echo "context=${context}"
             echo "tags<<EOF"
             echo "${image}:${ver}"
             if [ "${{ inputs.push_latest }}" = "true" ]; then echo "${image}:latest"; fi
@@ -65,18 +92,21 @@ jobs:
         with:
           context: ${{ steps.meta.outputs.context }}
           file: ./Dockerfile.valkey
+          build-args: |
+            APP_VERSION=${{ steps.meta.outputs.version }}
           platforms: ${{ inputs.platforms }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
-          cache-from: type=gha,scope=valkey-${{ inputs.valkey_version }}
-          cache-to: type=gha,mode=max,scope=valkey-${{ inputs.valkey_version }}
+          cache-from: type=gha,scope=valkey-${{ steps.meta.outputs.version }}
+          cache-to: type=gha,mode=max,scope=valkey-${{ steps.meta.outputs.version }}
 
       - name: Summary
         run: |
           {
             echo "### Built Valkey image"
             echo ""
-            echo "**Version:** ${{ inputs.valkey_version }}"
+            echo "**Minor:** ${{ steps.meta.outputs.minor }}"
+            echo "**Version:** ${{ steps.meta.outputs.version }}"
             echo "**Platforms:** ${{ inputs.platforms }}"
             echo "**Context:** ${{ steps.meta.outputs.context }}"
             echo ""
