@@ -44,9 +44,10 @@ jobs:
           src="${RUNNER_TEMP}/upstream/${UPSTREAM_PATH}/"
           test -d "$src"
           mkdir -p "${LOCAL_PATH}"
-          # Faithful mirror (adds new version dirs, updates and removes to match upstream).
-          # The hand-maintained top-level Dockerfile.* lives at the repo root and is untouched.
-          rsync -a --delete "$src" "${LOCAL_PATH}/"
+          # Additive mirror (adds new version dirs, updates existing ones) WITHOUT --delete, so
+          # versions you deliberately keep that Bitnami dropped from its latest-only layout
+          # (e.g. a recovered 8.1) are preserved. The top-level Dockerfile.* at the repo root is untouched.
+          rsync -a "$src" "${LOCAL_PATH}/"
 
       - name: Detect versions
         id: versions

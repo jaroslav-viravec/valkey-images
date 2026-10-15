@@ -6,8 +6,11 @@ FROM ${BASE_IMAGE}
 
 ARG TARGETARCH
 # Injected by the build workflow, read from the vendored sources (valkey/<minor>/debian-12).
-# Required: an empty value makes the component download fail fast.
+# Required: empty values make the component download fail fast. These vary per version
+# (e.g. 9.1.2 uses wait-for-port 1.0.11-4, 8.1.4 uses 1.0.10-1), so they must track the
+# vendored Dockerfile rather than being hardcoded here.
 ARG APP_VERSION
+ARG WAIT_FOR_PORT_VERSION
 
 LABEL org.opencontainers.image.base.name="docker.io/bitnami/minideb:bookworm" \
       org.opencontainers.image.title="valkey" \
@@ -25,7 +28,7 @@ RUN install_packages ca-certificates curl libgcc-s1 libgomp1 libssl3 libstdc++6 
 # Download + checksum-verify + extract the prebuilt Bitnami components. No compile.
 RUN mkdir -p /tmp/bitnami/pkg/cache/ ; cd /tmp/bitnami/pkg/cache/ || exit 1 ; \
     COMPONENTS=( \
-      "wait-for-port-1.0.11-3-linux-${OS_ARCH}-debian-12" \
+      "wait-for-port-${WAIT_FOR_PORT_VERSION}-linux-${OS_ARCH}-debian-12" \
       "valkey-${APP_VERSION}-0-linux-${OS_ARCH}-debian-12" \
     ) ; \
     for COMPONENT in "${COMPONENTS[@]}"; do \

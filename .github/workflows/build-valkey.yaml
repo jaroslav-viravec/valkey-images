@@ -77,9 +77,16 @@ jobs:
             echo "::error::Could not read image.version from ${context}/Dockerfile"
             exit 1
           fi
+          # wait-for-port revision varies per valkey version; read it from the vendored Dockerfile
+          wfp="$(grep -oE 'wait-for-port-[0-9][0-9.]*-[0-9]+' "${context}/Dockerfile" | head -1 | sed -E 's/^wait-for-port-//')"
+          if [ -z "$wfp" ]; then
+            echo "::error::Could not read the wait-for-port version from ${context}/Dockerfile"
+            exit 1
+          fi
           {
             echo "minor=${minor}"
             echo "version=${ver}"
+            echo "wait_for_port=${wfp}"
             echo "context=${context}"
             echo "tags<<EOF"
             echo "${image}:${ver}"
@@ -94,6 +101,7 @@ jobs:
           file: ./Dockerfile.valkey
           build-args: |
             APP_VERSION=${{ steps.meta.outputs.version }}
+            WAIT_FOR_PORT_VERSION=${{ steps.meta.outputs.wait_for_port }}
           platforms: ${{ inputs.platforms }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
