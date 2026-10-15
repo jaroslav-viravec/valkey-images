@@ -1,0 +1,90 @@
+name: Sync Sentinel sources
+
+# Mirrors the upstream Bitnami valkey-sentinel sources into this repo and opens a PR
+# when a new version (or any change) appears. Build is a separate, manual workflow
+# (build-sentinel.yaml): this only vendors sources for review.
+
+on:
+  schedule:
+    # ~nightly, off-peak and off the :00 mark (GitHub delays on-the-hour crons)
+    - cron: "37 2 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  pull-requests: write
+
+env:
+  UPSTREAM_REPO: bitnami/containers
+  UPSTREAM_PATH: bitnami/valkey-sentinel
+  LOCAL_PATH: valkey-sentinel
+  BRANCH: sync/valkey-sentinel
+
+jobs:
+  sync:
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout this repo
+        uses: actions/checkout@v4
+
+      - name: Fetch upstream Bitnami sources (sparse, blobless)
+        run: |
+          set -euo pipefail
+          dest="${RUNNER_TEMP}/upstream"
+          rm -rf "$dest"
+          git clone --depth 1 --filter=blob:none --sparse \
+            "https://github.com/${UPSTREAM_REPO}.git" "$dest"
+          git -C "$dest" sparse-checkout set "${UPSTREAM_PATH}"
+
+      - name: Mirror sources into repo
+        run: |
+          set -euo pipefail
+          src="${RUNNER_TEMP}/upstream/${UPSTREAM_PATH}/"
+          test -d "$src"
+          mkdir -p "${LOCAL_PATH}"
+          # Faithful mirror (adds new version dirs, updates and removes to match upstream).
+          # The hand-maintained top-level Dockerfile.* lives at the repo root and is untouched.
+          rsync -a --delete "$src" "${LOCAL_PATH}/"
+
+      - name: Detect versions
+        id: versions
+        run: |
+          set -euo pipefail
+          vers="$(grep -rhoE 'image\.version="[0-9][^"]*"' "${LOCAL_PATH}" \
+            | sed -E 's/.*="([^"]+)"/\1/' | sort -uV | paste -sd, - || true)"
+          echo "list=${vers:-unknown}" >> "$GITHUB_OUTPUT"
+
+      - name: Open or update pull request
+        run: |
+          set -euo pipefail
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "${BRANCH}"
+          git add "${LOCAL_PATH}"
+          if git diff --cached --quiet; then
+            echo "No upstream changes for ${LOCAL_PATH}; nothing to do."
+            exit 0
+          fi
+          git commit -m "chore(sync): update ${LOCAL_PATH} sources from ${UPSTREAM_REPO} (${{ steps.versions.outputs.list }})"
+          git push -f origin "${BRANCH}"
+          body="$(cat <<EOF
+          Automated sync of \`${UPSTREAM_PATH}\` sources from [\`${UPSTREAM_REPO}\`](https://github.com/${UPSTREAM_REPO}/tree/main/${UPSTREAM_PATH}).
+
+          Detected version(s): \`${{ steps.versions.outputs.list }}\`
+
+          To adopt a new version: bump the pinned version in the top-level \`Dockerfile.valkey-sentinel\`
+          (the \`image.version\` label and the \`valkey-sentinel-<ver>\` component), then run the
+          **Build Sentinel** workflow.
+          EOF
+          )"
+          if [ "$(gh pr view "${BRANCH}" --json state -q .state 2>/dev/null || true)" = "OPEN" ]; then
+            echo "PR for ${BRANCH} already open; branch updated."
+          else
+            gh pr create \
+              --base "${{ github.event.repository.default_branch }}" \
+              --head "${BRANCH}" \
+              --title "chore(sync): update valkey-sentinel sources from Bitnami" \
+              --body "$body"
+          fi
