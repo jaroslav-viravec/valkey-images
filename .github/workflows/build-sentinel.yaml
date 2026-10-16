@@ -1,12 +1,22 @@
 name: Build Sentinel
 
+# Builds ANY Valkey Sentinel version that exists in bitnami/containers and pushes it to
+# ghcr.io/<owner>/valkey-sentinel:<version>.
+#
+# Pass a version (e.g. 8.1.4) or leave it empty to build the latest. The workflow
+# resolves the version to the commit where Bitnami published it, fetches just that
+# version's sources, and builds them with the hand-maintained top-level
+# Dockerfile.valkey-sentinel. APP_VERSION and the package list are read from that
+# version's own Dockerfile and passed as build-args, so the custom Dockerfile builds
+# every version faithfully without hardcoding.
+
 on:
   workflow_dispatch:
     inputs:
-      valkey_version:
-        description: "Valkey version to build (must match a vendored valkey-sentinel/<x.y>/debian-12 dir)"
-        required: true
-        default: "9.1.2"
+      sentinel_version:
+        description: "Valkey Sentinel version to build, e.g. 8.1.4 (empty = latest in bitnami/containers)."
+        required: false
+        default: ""
       platforms:
         description: "Target platforms (comma-separated)"
         required: true
@@ -19,6 +29,8 @@ on:
 
 env:
   REGISTRY: ghcr.io
+  UPSTREAM_REPO: bitnami/containers
+  PRODUCT: valkey-sentinel
 
 jobs:
   build:
@@ -44,16 +56,74 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Compute image, context dir and tags
+      - name: Resolve version, fetch sources, derive build args
         id: meta
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
+          set -euo pipefail
           owner="${{ github.repository_owner }}"
-          image="${REGISTRY,,}/${owner,,}/valkey-sentinel"
-          ver="${{ inputs.valkey_version }}"
-          minor="$(echo "$ver" | cut -d. -f1,2)"
+          image="${REGISTRY,,}/${owner,,}/${PRODUCT}"
+          api="https://api.github.com/repos/${UPSTREAM_REPO}"
+          want="${{ inputs.sentinel_version }}"
+
+          # 1) resolve target minor dir + the commit SHA that holds its sources
+          if [ -z "$want" ] || [ "$want" = "latest" ]; then
+            minor="$(curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" "${api}/contents/bitnami/${PRODUCT}" \
+              | jq -r '.[] | select(.type=="dir") | .name' | sort -V | tail -1)"
+            sha="main"
+            echo "resolving latest -> minor ${minor} @ main"
+          else
+            minor="$(printf '%s' "$want" | cut -d. -f1,2)"
+            sha=""
+            for p in $(seq 1 10); do
+              page="$(curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" \
+                "${api}/commits?path=bitnami/${PRODUCT}/${minor}/debian-12/Dockerfile&per_page=100&page=${p}")"
+              [ "$(printf '%s' "$page" | jq 'length')" -gt 0 ] || break
+              sha="$(printf '%s' "$page" \
+                | jq -r --arg v "$want" '.[] | select(.commit.message | contains("Release \($v)-debian")) | .sha' \
+                | head -1)"
+              if [ -n "$sha" ]; then break; fi
+            done
+            if [ -z "$sha" ]; then
+              echo "::error::${PRODUCT} ${want} not found in ${UPSTREAM_REPO} history (searched 10 pages of bitnami/${PRODUCT}/${minor})"
+              exit 1
+            fi
+            echo "resolved ${want} -> minor ${minor} @ ${sha}"
+          fi
+
+          # 2) fetch just that commit's sources (shallow, blobless, sparse)
+          dest="${RUNNER_TEMP}/bc"
+          rm -rf "$dest"; mkdir -p "$dest"
+          git -C "$dest" init -q
+          git -C "$dest" remote add origin "https://github.com/${UPSTREAM_REPO}.git"
+          git -C "$dest" config extensions.partialClone origin
+          git -C "$dest" fetch -q --depth 1 --filter=blob:none origin "$sha"
+          git -C "$dest" sparse-checkout init --cone
+          git -C "$dest" sparse-checkout set "bitnami/${PRODUCT}/${minor}"
+          git -C "$dest" checkout -q FETCH_HEAD
+          ctx="${dest}/bitnami/${PRODUCT}/${minor}/debian-12"
+          if [ ! -f "${ctx}/Dockerfile" ]; then
+            echo "::error::no debian-12 sources for ${PRODUCT} ${minor} at ${sha}"
+            exit 1
+          fi
+
+          # 3) derive build args from that version's own Dockerfile
+          ver="$(grep -oE 'image\.version="[0-9][^"]*"' "${ctx}/Dockerfile" | head -1 | sed -E 's/.*="([^"]+)"/\1/')"
+          pkgs="$(grep -E '^RUN install_packages ' "${ctx}/Dockerfile" | head -1 | sed -E 's/^RUN install_packages //')"
+          if [ -z "$ver" ] || [ -z "$pkgs" ]; then
+            echo "::error::could not derive version/packages from ${ctx}/Dockerfile"
+            exit 1
+          fi
+
+          # 4) build with our custom top-level Dockerfile, inside the fetched context
+          cp "${GITHUB_WORKSPACE}/Dockerfile.${PRODUCT}" "${ctx}/Dockerfile.build"
+
           {
-            echo "image=${image}"
-            echo "context=./valkey-sentinel/${minor}/debian-12"
+            echo "version=${ver}"
+            echo "packages=${pkgs}"
+            echo "context=${ctx}"
+            echo "dockerfile=${ctx}/Dockerfile.build"
             echo "tags<<EOF"
             echo "${image}:${ver}"
             if [ "${{ inputs.push_latest }}" = "true" ]; then echo "${image}:latest"; fi
@@ -64,21 +134,24 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: ${{ steps.meta.outputs.context }}
-          file: ./Dockerfile.valkey-sentinel
+          file: ${{ steps.meta.outputs.dockerfile }}
+          build-args: |
+            APP_VERSION=${{ steps.meta.outputs.version }}
+            PACKAGES=${{ steps.meta.outputs.packages }}
           platforms: ${{ inputs.platforms }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
-          cache-from: type=gha,scope=sentinel-${{ inputs.valkey_version }}
-          cache-to: type=gha,mode=max,scope=sentinel-${{ inputs.valkey_version }}
+          cache-from: type=gha,scope=sentinel-${{ steps.meta.outputs.version }}
+          cache-to: type=gha,mode=max,scope=sentinel-${{ steps.meta.outputs.version }}
 
       - name: Summary
         run: |
           {
             echo "### Built Valkey Sentinel image"
             echo ""
-            echo "**Version:** ${{ inputs.valkey_version }}"
+            echo "**Version:** ${{ steps.meta.outputs.version }}"
+            echo "**Packages:** ${{ steps.meta.outputs.packages }}"
             echo "**Platforms:** ${{ inputs.platforms }}"
-            echo "**Context:** ${{ steps.meta.outputs.context }}"
             echo ""
             echo "Tags:"
             echo '```'
