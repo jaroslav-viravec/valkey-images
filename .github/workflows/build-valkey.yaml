@@ -1,17 +1,21 @@
 name: Build Valkey
 
-# Builds the valkey image from the hand-maintained top-level Dockerfile.valkey, using
-# valkey/<minor>/debian-12 (kept current by the Sync Valkey workflow) as the build
-# context. The exact version is read from the vendored Dockerfile's image.version label
-# and passed to Dockerfile.valkey as the APP_VERSION build-arg, so nothing is hardcoded
-# here. Bitnami ships build sources only for the latest minor; older minors are README
-# stubs and cannot be built.
+# Builds ANY Valkey version that exists in bitnami/containers and pushes it to
+# ghcr.io/<owner>/valkey:<version>.
+#
+# Pass a version (e.g. 8.1.4) or leave it empty to build the latest. The workflow
+# resolves the version to the commit where Bitnami published it (Bitnami keeps only the
+# latest minor on main and has no git tags, so older versions live in history), fetches
+# just that version's sources, and builds them with the hand-maintained top-level
+# Dockerfile.valkey. APP_VERSION, WAIT_FOR_PORT_VERSION and the package list are read
+# from that version's own Dockerfile and passed as build-args, so the custom Dockerfile
+# builds every version faithfully without hardcoding.
 
 on:
   workflow_dispatch:
     inputs:
-      valkey_minor:
-        description: "Vendored minor to build (valkey/<minor>/debian-12). Leave empty to build the latest vendored minor."
+      valkey_version:
+        description: "Valkey version to build, e.g. 8.1.4 (empty = latest in bitnami/containers)."
         required: false
         default: ""
       platforms:
@@ -26,6 +30,8 @@ on:
 
 env:
   REGISTRY: ghcr.io
+  UPSTREAM_REPO: bitnami/containers
+  PRODUCT: valkey
 
 jobs:
   build:
@@ -51,43 +57,76 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Resolve minor, version, context and tags
+      - name: Resolve version, fetch sources, derive build args
         id: meta
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           owner="${{ github.repository_owner }}"
-          image="${REGISTRY,,}/${owner,,}/valkey"
-          minor="${{ inputs.valkey_minor }}"
-          if [ -z "$minor" ]; then
-            # highest minor that actually ships build sources (not a README stub)
-            minor="$(find valkey -mindepth 2 -maxdepth 2 -type d -name debian-12 \
-              | sed -E 's#valkey/([^/]+)/debian-12#\1#' | sort -V | tail -1 || true)"
+          image="${REGISTRY,,}/${owner,,}/${PRODUCT}"
+          api="https://api.github.com/repos/${UPSTREAM_REPO}"
+          want="${{ inputs.valkey_version }}"
+
+          # 1) resolve target minor dir + the commit SHA that holds its sources
+          if [ -z "$want" ] || [ "$want" = "latest" ]; then
+            minor="$(curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" "${api}/contents/bitnami/${PRODUCT}" \
+              | jq -r '.[] | select(.type=="dir") | .name' | sort -V | tail -1)"
+            sha="main"
+            echo "resolving latest -> minor ${minor} @ main"
+          else
+            minor="$(printf '%s' "$want" | cut -d. -f1,2)"
+            sha=""
+            for p in $(seq 1 10); do
+              page="$(curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" \
+                "${api}/commits?path=bitnami/${PRODUCT}/${minor}/debian-12/Dockerfile&per_page=100&page=${p}")"
+              [ "$(printf '%s' "$page" | jq 'length')" -gt 0 ] || break
+              sha="$(printf '%s' "$page" \
+                | jq -r --arg v "$want" '.[] | select(.commit.message | contains("Release \($v)-debian")) | .sha' \
+                | head -1)"
+              if [ -n "$sha" ]; then break; fi
+            done
+            if [ -z "$sha" ]; then
+              echo "::error::valkey ${want} not found in ${UPSTREAM_REPO} history (searched 10 pages of bitnami/${PRODUCT}/${minor})"
+              exit 1
+            fi
+            echo "resolved ${want} -> minor ${minor} @ ${sha}"
           fi
-          if [ -z "$minor" ]; then
-            echo "::error::No vendored valkey sources found. Run the 'Sync Valkey sources' workflow first (Bitnami ships only the latest minor)."
+
+          # 2) fetch just that commit's sources (shallow, blobless, sparse)
+          dest="${RUNNER_TEMP}/bc"
+          rm -rf "$dest"; mkdir -p "$dest"
+          git -C "$dest" init -q
+          git -C "$dest" remote add origin "https://github.com/${UPSTREAM_REPO}.git"
+          git -C "$dest" config extensions.partialClone origin
+          git -C "$dest" fetch -q --depth 1 --filter=blob:none origin "$sha"
+          git -C "$dest" sparse-checkout init --cone
+          git -C "$dest" sparse-checkout set "bitnami/${PRODUCT}/${minor}"
+          git -C "$dest" checkout -q FETCH_HEAD
+          ctx="${dest}/bitnami/${PRODUCT}/${minor}/debian-12"
+          if [ ! -f "${ctx}/Dockerfile" ]; then
+            echo "::error::no debian-12 sources for ${PRODUCT} ${minor} at ${sha}"
             exit 1
           fi
-          context="valkey/${minor}/debian-12"
-          if [ ! -f "${context}/Dockerfile" ]; then
-            echo "::error::No vendored sources at ${context}/Dockerfile. Run the 'Sync Valkey sources' workflow first."
+
+          # 3) derive build args from that version's own Dockerfile
+          ver="$(grep -oE 'image\.version="[0-9][^"]*"' "${ctx}/Dockerfile" | head -1 | sed -E 's/.*="([^"]+)"/\1/')"
+          wfp="$(grep -oE 'wait-for-port-[0-9][0-9.]*-[0-9]+' "${ctx}/Dockerfile" | head -1 | sed -E 's/^wait-for-port-//')"
+          pkgs="$(grep -E '^RUN install_packages ' "${ctx}/Dockerfile" | head -1 | sed -E 's/^RUN install_packages //')"
+          if [ -z "$ver" ] || [ -z "$wfp" ] || [ -z "$pkgs" ]; then
+            echo "::error::could not derive version/wait-for-port/packages from ${ctx}/Dockerfile"
             exit 1
           fi
-          ver="$(grep -oE 'image\.version="[0-9][^"]*"' "${context}/Dockerfile" | head -1 | sed -E 's/.*="([^"]+)"/\1/')"
-          if [ -z "$ver" ]; then
-            echo "::error::Could not read image.version from ${context}/Dockerfile"
-            exit 1
-          fi
-          # wait-for-port revision varies per valkey version; read it from the vendored Dockerfile
-          wfp="$(grep -oE 'wait-for-port-[0-9][0-9.]*-[0-9]+' "${context}/Dockerfile" | head -1 | sed -E 's/^wait-for-port-//')"
-          if [ -z "$wfp" ]; then
-            echo "::error::Could not read the wait-for-port version from ${context}/Dockerfile"
-            exit 1
-          fi
+
+          # 4) build with our custom top-level Dockerfile, inside the fetched context
+          cp "${GITHUB_WORKSPACE}/Dockerfile.${PRODUCT}" "${ctx}/Dockerfile.build"
+
           {
-            echo "minor=${minor}"
             echo "version=${ver}"
             echo "wait_for_port=${wfp}"
-            echo "context=${context}"
+            echo "packages=${pkgs}"
+            echo "context=${ctx}"
+            echo "dockerfile=${ctx}/Dockerfile.build"
             echo "tags<<EOF"
             echo "${image}:${ver}"
             if [ "${{ inputs.push_latest }}" = "true" ]; then echo "${image}:latest"; fi
@@ -98,10 +137,11 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: ${{ steps.meta.outputs.context }}
-          file: ./Dockerfile.valkey
+          file: ${{ steps.meta.outputs.dockerfile }}
           build-args: |
             APP_VERSION=${{ steps.meta.outputs.version }}
             WAIT_FOR_PORT_VERSION=${{ steps.meta.outputs.wait_for_port }}
+            PACKAGES=${{ steps.meta.outputs.packages }}
           platforms: ${{ inputs.platforms }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
@@ -113,10 +153,10 @@ jobs:
           {
             echo "### Built Valkey image"
             echo ""
-            echo "**Minor:** ${{ steps.meta.outputs.minor }}"
             echo "**Version:** ${{ steps.meta.outputs.version }}"
+            echo "**wait-for-port:** ${{ steps.meta.outputs.wait_for_port }}"
+            echo "**Packages:** ${{ steps.meta.outputs.packages }}"
             echo "**Platforms:** ${{ inputs.platforms }}"
-            echo "**Context:** ${{ steps.meta.outputs.context }}"
             echo ""
             echo "Tags:"
             echo '```'
