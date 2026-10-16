@@ -100,9 +100,9 @@ Dockerfile.redis-exporter
 
 | Product | Build | Notes |
 | ------- | ----- | ----- |
-| valkey | ✅ on-demand, any version | reference implementation |
-| valkey-sentinel | 🚧 to be migrated | build workflow + Dockerfile still being aligned to the valkey on-demand pattern |
-| redis-exporter | 🚧 to be migrated | same |
+| valkey | ✅ on-demand, any version | 2 components (valkey + wait-for-port) |
+| valkey-sentinel | ✅ on-demand, any version | single component; `major.minor` source dirs |
+| redis-exporter | ✅ on-demand, any version | single component; `major`-only source dirs |
 
 ## Prerequisites (one-time)
 
