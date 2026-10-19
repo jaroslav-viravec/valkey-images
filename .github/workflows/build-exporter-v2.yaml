@@ -15,9 +15,12 @@ on:
   workflow_dispatch:
     inputs:
       exporter_version:
-        description: "Redis Exporter version to build, e.g. 1.92.0 (empty = latest in vendored sources)."
-        required: false
-        default: ""
+        description: "Redis Exporter version to build. Run 'Refresh version choices' after merging a sync PR to update this list."
+        required: true
+        type: choice
+        options:  # auto-updated by refresh-version-choices.yaml
+          - "latest"
+          - "1.94.0"
       platforms:
         description: "Target platforms (comma-separated)"
         required: true
@@ -83,6 +86,8 @@ jobs:
           owner="${{ github.repository_owner }}"
           image="${REGISTRY,,}/${owner,,}/${PRODUCT}"
           want="${{ inputs.exporter_version }}"
+          # "latest" choice means: resolve to newest vendored version
+          [ "$want" = "latest" ] && want=""
 
           # 1) locate the right major dir inside the vendored redis-exporter/ tree
           # (Bitnami uses major-only dirs for redis-exporter, e.g. redis-exporter/1/debian-12)
