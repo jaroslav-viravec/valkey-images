@@ -1,22 +1,26 @@
-name: Build Sentinel (from upstream)
+name: Build Sentinel
 
-# Builds ANY Valkey Sentinel version that exists in bitnami/containers and pushes it to
-# ghcr.io/<owner>/valkey-sentinel:<version>.
+# Builds the Valkey Sentinel image from the VENDORED sources already in this repo
+# (valkey-sentinel/ directory, populated by sync-sentinel.yaml and merged via PR).
 #
-# Pass a version (e.g. 8.1.4) or leave it empty to build the latest. The workflow
-# resolves the version to the commit where Bitnami published it, fetches just that
-# version's sources, and builds them with the hand-maintained top-level
-# Dockerfile.valkey-sentinel. APP_VERSION and the package list are read from that
-# version's own Dockerfile and passed as build-args, so the custom Dockerfile builds
-# every version faithfully without hardcoding.
+# Unlike build-sentinel.yaml, this workflow does NOT fetch from upstream — it uses
+# exactly what was reviewed and merged, so build = what was audited.
+#
+# Intended flow:
+#   1. sync-sentinel.yaml detects new upstream version → opens PR with updated sources
+#   2. You review and merge the PR into the default branch
+#   3. Trigger THIS workflow — it reads from valkey-sentinel/ and builds
 
 on:
   workflow_dispatch:
     inputs:
       sentinel_version:
-        description: "Valkey Sentinel version to build, e.g. 8.1.4 (empty = latest in bitnami/containers)."
-        required: false
-        default: ""
+        description: "Valkey Sentinel version to build. Run 'Refresh version choices' after merging a sync PR to update this list."
+        required: true
+        type: choice
+        options:  # auto-updated by refresh-version-choices.yaml
+          - "latest"
+          - "8.1.4"
       platforms:
         description: "Target platforms (comma-separated)"
         required: true
@@ -29,7 +33,6 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  UPSTREAM_REPO: bitnami/containers
   PRODUCT: valkey-sentinel
 
 jobs:
@@ -40,7 +43,7 @@ jobs:
       packages: write
 
     steps:
-      - name: Checkout (this fork)
+      - name: Checkout (this repo)
         uses: actions/checkout@v4
 
       - name: Set up QEMU
@@ -56,59 +59,35 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Resolve version, fetch sources, derive build args
+      - name: Resolve version and derive build args from vendored sources
         id: meta
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           owner="${{ github.repository_owner }}"
           image="${REGISTRY,,}/${owner,,}/${PRODUCT}"
-          api="https://api.github.com/repos/${UPSTREAM_REPO}"
           want="${{ inputs.sentinel_version }}"
+          # "latest" choice means: resolve to newest vendored version
+          [ "$want" = "latest" ] && want=""
 
-          # 1) resolve target minor dir + the commit SHA that holds its sources
+          # 1) find the right major.minor dir in vendored sources
+          # (valkey-sentinel uses major.minor dirs, e.g. valkey-sentinel/8.1/debian-12)
           if [ -z "$want" ] || [ "$want" = "latest" ]; then
-            minor="$(curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" "${api}/contents/bitnami/${PRODUCT}" \
-              | jq -r '.[] | select(.type=="dir") | .name' | sort -V | tail -1)"
-            sha="main"
-            echo "resolving latest -> minor ${minor} @ main"
+            dir="$(ls -d "${GITHUB_WORKSPACE}/valkey-sentinel"/[0-9]*/ 2>/dev/null \
+              | xargs -n1 basename | sort -V | tail -1)"
+            echo "using latest vendored dir: ${dir}"
           else
-            minor="$(printf '%s' "$want" | cut -d. -f1,2)"
-            sha=""
-            for p in $(seq 1 10); do
-              page="$(curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" \
-                "${api}/commits?path=bitnami/${PRODUCT}/${minor}/debian-12/Dockerfile&per_page=100&page=${p}")"
-              [ "$(printf '%s' "$page" | jq 'length')" -gt 0 ] || break
-              sha="$(printf '%s' "$page" \
-                | jq -r --arg v "$want" '.[] | select(.commit.message | contains("Release \($v)-debian")) | .sha' \
-                | head -1)"
-              if [ -n "$sha" ]; then break; fi
-            done
-            if [ -z "$sha" ]; then
-              echo "::error::${PRODUCT} ${want} not found in ${UPSTREAM_REPO} history (searched 10 pages of bitnami/${PRODUCT}/${minor})"
-              exit 1
-            fi
-            echo "resolved ${want} -> minor ${minor} @ ${sha}"
+            dir="$(printf '%s' "$want" | cut -d. -f1,2)"
+            echo "using dir ${dir} for requested version ${want}"
           fi
 
-          # 2) fetch just that commit's sources (shallow, blobless, sparse)
-          dest="${RUNNER_TEMP}/bc"
-          rm -rf "$dest"; mkdir -p "$dest"
-          git -C "$dest" init -q
-          git -C "$dest" remote add origin "https://github.com/${UPSTREAM_REPO}.git"
-          git -C "$dest" config extensions.partialClone origin
-          git -C "$dest" fetch -q --depth 1 --filter=blob:none origin "$sha"
-          git -C "$dest" sparse-checkout init --cone
-          git -C "$dest" sparse-checkout set "bitnami/${PRODUCT}/${minor}"
-          git -C "$dest" checkout -q FETCH_HEAD
-          ctx="${dest}/bitnami/${PRODUCT}/${minor}/debian-12"
+          ctx="${GITHUB_WORKSPACE}/valkey-sentinel/${dir}/debian-12"
           if [ ! -f "${ctx}/Dockerfile" ]; then
-            echo "::error::no debian-12 sources for ${PRODUCT} ${minor} at ${sha}"
+            echo "::error::no vendored sources at valkey-sentinel/${dir}/debian-12/Dockerfile"
+            echo "::error::Merge a sync-sentinel PR first, then re-run this workflow."
             exit 1
           fi
 
-          # 3) derive build args from that version's own Dockerfile
+          # 2) derive build args from the vendored Dockerfile (no upstream API calls)
           ver="$(grep -oE 'image\.version="[0-9][^"]*"' "${ctx}/Dockerfile" | head -1 | sed -E 's/.*="([^"]+)"/\1/')"
           pkgs="$(grep -E '^RUN install_packages ' "${ctx}/Dockerfile" | head -1 | sed -E 's/^RUN install_packages //')"
           if [ -z "$ver" ] || [ -z "$pkgs" ]; then
@@ -116,7 +95,13 @@ jobs:
             exit 1
           fi
 
-          # 4) build with our custom top-level Dockerfile, inside the fetched context
+          # warn if the requested version differs from what's vendored (build proceeds with vendored)
+          if [ -n "$want" ] && [ "$want" != "latest" ] && [ "$ver" != "$want" ]; then
+            echo "::warning::requested ${want} but vendored sources contain ${ver} — building ${ver}"
+          fi
+          echo "building ${PRODUCT} ${ver} from vendored sources"
+
+          # 3) stage our custom top-level Dockerfile inside the vendored context
           cp "${GITHUB_WORKSPACE}/Dockerfile.${PRODUCT}" "${ctx}/Dockerfile.build"
 
           {
@@ -147,11 +132,12 @@ jobs:
       - name: Summary
         run: |
           {
-            echo "### Built Valkey Sentinel image"
+            echo "### Built Valkey Sentinel image (vendored sources)"
             echo ""
             echo "**Version:** ${{ steps.meta.outputs.version }}"
             echo "**Packages:** ${{ steps.meta.outputs.packages }}"
             echo "**Platforms:** ${{ inputs.platforms }}"
+            echo "**Source:** vendored \`valkey-sentinel/\` in this repo (merged sync PR)"
             echo ""
             echo "Tags:"
             echo '```'

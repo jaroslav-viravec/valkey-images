@@ -1,12 +1,11 @@
 name: Refresh version choices
 
 # Scans vendored sources in this repo and updates the type: choice dropdown
-# options in the v2 build workflows so users see real version numbers instead
+# options in all v2 build workflows so users see real version numbers instead
 # of typing them manually.
 #
-# Triggers automatically whenever a sync PR is merged (vendored sources change),
-# or manually at any time. The workflow commits the updated build YAML files
-# back to the default branch.
+# Triggers automatically whenever a sync PR is merged (vendored sources change
+# on main), or run manually at any time.
 
 on:
   workflow_dispatch: {}
@@ -28,42 +27,63 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Discover redis-exporter vendored versions
-        id: exporter
+      - name: Discover vendored versions
+        id: versions
         run: |
           set -euo pipefail
-          versions=""
-          for dir in $(ls -d "${GITHUB_WORKSPACE}/redis-exporter"/[0-9]*/ 2>/dev/null | sort -rV); do
-            dfile="${dir}debian-12/Dockerfile"
-            [ -f "$dfile" ] || continue
-            ver="$(grep -oE 'image\.version="[0-9][^"]*"' "$dfile" | head -1 | sed -E 's/.*="([^"]+)"/\1/')"
-            [ -n "$ver" ] && versions="${versions} ${ver}"
-          done
-          echo "versions=${versions# }" >> "$GITHUB_OUTPUT"
-          echo "Found redis-exporter versions: ${versions# :-none}"
 
-      - name: Update build-exporter-v2.yaml choices
+          discover() {
+            local product="$1" versions=""
+            for dir in $(ls -d "${GITHUB_WORKSPACE}/${product}"/[0-9]*/ 2>/dev/null | sort -rV); do
+              local dfile="${dir}debian-12/Dockerfile"
+              [ -f "$dfile" ] || continue
+              local ver
+              ver="$(grep -oE 'image\.version="[0-9][^"]*"' "$dfile" | head -1 | sed -E 's/.*="([^"]+)"/\1/')"
+              [ -n "$ver" ] && versions="${versions} ${ver}"
+            done
+            echo "${versions# }"
+          }
+
+          exporter="$(discover redis-exporter)"
+          valkey="$(discover valkey)"
+          sentinel="$(discover valkey-sentinel)"
+
+          echo "exporter=${exporter}" >> "$GITHUB_OUTPUT"
+          echo "valkey=${valkey}"     >> "$GITHUB_OUTPUT"
+          echo "sentinel=${sentinel}" >> "$GITHUB_OUTPUT"
+
+          echo "redis-exporter:  ${exporter:-none}"
+          echo "valkey:          ${valkey:-none}"
+          echo "valkey-sentinel: ${sentinel:-none}"
+
+      - name: Update version choices in build workflows
         run: |
           set -euo pipefail
-          vers="${{ steps.exporter.outputs.versions }}"
-          if [ -z "$vers" ]; then
-            echo "No vendored redis-exporter versions found — skipping choices update."
-            exit 0
-          fi
-          # shellcheck disable=SC2086
-          python3 .github/scripts/update-version-choices.py \
-            .github/workflows/build-exporter-v2.yaml \
-            $vers
+          script=".github/scripts/update-version-choices.py"
 
-      - name: Commit and push updated choices
+          [ -n "${{ steps.versions.outputs.exporter }}" ] && \
+            python3 "$script" .github/workflows/build-exporter.yaml \
+              ${{ steps.versions.outputs.exporter }} || true
+
+          [ -n "${{ steps.versions.outputs.valkey }}" ] && \
+            python3 "$script" .github/workflows/build-valkey.yaml \
+              ${{ steps.versions.outputs.valkey }} || true
+
+          [ -n "${{ steps.versions.outputs.sentinel }}" ] && \
+            python3 "$script" .github/workflows/build-sentinel.yaml \
+              ${{ steps.versions.outputs.sentinel }} || true
+
+      - name: Commit and push
         run: |
           set -euo pipefail
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add .github/workflows/build-exporter-v2.yaml
+          git add .github/workflows/build-exporter.yaml \
+                  .github/workflows/build-valkey.yaml \
+                  .github/workflows/build-sentinel.yaml
           if git diff --cached --quiet; then
             echo "Version choices already up to date — nothing to commit."
             exit 0
           fi
-          git commit -m "chore(versions): refresh build-exporter-v2 version choices"
+          git commit -m "chore(versions): refresh version choices in build workflows"
           git push origin HEAD

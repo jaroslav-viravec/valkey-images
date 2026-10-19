@@ -1,25 +1,26 @@
-name: Build Exporter (from upstream)
+name: Build Exporter
 
-# Builds ANY Redis Exporter version that exists in bitnami/containers and pushes it to
-# ghcr.io/<owner>/redis-exporter:<version>.
+# Builds the Redis Exporter image from the VENDORED sources already in this repo
+# (redis-exporter/ directory, populated by sync-exporter.yaml and merged via PR).
 #
-# Pass a version (e.g. 1.92.1) or leave it empty to build the latest. The workflow
-# resolves the version to the commit where Bitnami published it, fetches just that
-# version's sources, and builds them with the hand-maintained top-level
-# Dockerfile.redis-exporter. APP_VERSION and the package list are read from that
-# version's own Dockerfile and passed as build-args, so the custom Dockerfile builds
-# every version faithfully without hardcoding.
+# Unlike build-exporter.yaml, this workflow does NOT fetch from upstream — it uses
+# exactly what was reviewed and merged, so build = what was audited.
 #
-# Note: redis-exporter uses major-only source dirs (redis-exporter/<major>/debian-12),
-# unlike valkey/sentinel which use <major.minor>.
+# Intended flow:
+#   1. sync-exporter.yaml detects new upstream version → opens PR with updated sources
+#   2. You review and merge the PR into the default branch
+#   3. Trigger THIS workflow — it reads from redis-exporter/ and builds
 
 on:
   workflow_dispatch:
     inputs:
       exporter_version:
-        description: "Redis Exporter version to build, e.g. 1.92.1 (empty = latest in bitnami/containers)."
-        required: false
-        default: ""
+        description: "Redis Exporter version to build. Run 'Refresh version choices' after merging a sync PR to update this list."
+        required: true
+        type: choice
+        options:  # auto-updated by refresh-version-choices.yaml
+          - "latest"
+          - "1.94.0"
       platforms:
         description: "Target platforms (comma-separated)"
         required: true
@@ -32,7 +33,6 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  UPSTREAM_REPO: bitnami/containers
   PRODUCT: redis-exporter
 
 jobs:
@@ -43,7 +43,7 @@ jobs:
       packages: write
 
     steps:
-      - name: Checkout (this fork)
+      - name: Checkout (this repo)
         uses: actions/checkout@v4
 
       - name: Set up QEMU
@@ -59,91 +59,56 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Show available upstream versions
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Show available vendored versions
         run: |
           set -euo pipefail
-          api="https://api.github.com/repos/${UPSTREAM_REPO}"
           sum="$GITHUB_STEP_SUMMARY"
-          echo "### Available upstream versions for \`${PRODUCT}\`" >> "$sum"
-          echo "_Tip: run the **List available versions** workflow for a full view including vendored sources._" >> "$sum"
+          echo "### Available vendored versions for \`${PRODUCT}\`" >> "$sum"
+          echo "_Tip: run **Refresh version choices** after merging a sync PR to add new versions to this dropdown._" >> "$sum"
           echo "" >> "$sum"
-          dirs="$(curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" \
-            "${api}/contents/bitnami/${PRODUCT}" \
-            | jq -r '.[] | select(.type=="dir") | .name' | sort -V)"
-          for dir in $dirs; do
-            ver="$(curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" \
-              "${api}/contents/bitnami/${PRODUCT}/${dir}/debian-12/Dockerfile" \
-              | jq -r '.content // empty' | base64 -d \
-              | grep -oE 'image\.version="[0-9][^"]*"' | head -1 \
-              | sed -E 's/.*="([^"]+)"/\1/' 2>/dev/null || echo 'unknown')"
-            echo "- \`${ver}\` (dir \`${dir}\`)" >> "$sum"
+          found=0
+          for dir in $(ls -d "${GITHUB_WORKSPACE}/${PRODUCT}"/[0-9]*/ 2>/dev/null | sort -V); do
+            dname="$(basename "$dir")"
+            dfile="${dir}debian-12/Dockerfile"
+            [ -f "$dfile" ] || continue
+            ver="$(grep -oE 'image\.version="[0-9][^"]*"' "$dfile" | head -1 | sed -E 's/.*="([^"]+)"/\1/')"
+            [ -n "$ver" ] || continue
+            echo "- \`${ver}\` (dir \`${dname}\`)" >> "$sum"
+            found=1
           done
+          [ "$found" -eq 1 ] || echo "> No vendored sources found — merge a \`sync-${PRODUCT}\` PR first." >> "$sum"
           echo "" >> "$sum"
 
-      - name: Resolve version, fetch sources, derive build args
+      - name: Resolve version and derive build args from vendored sources
         id: meta
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           owner="${{ github.repository_owner }}"
           image="${REGISTRY,,}/${owner,,}/${PRODUCT}"
-          api="https://api.github.com/repos/${UPSTREAM_REPO}"
           want="${{ inputs.exporter_version }}"
+          # "latest" choice means: resolve to newest vendored version
+          [ "$want" = "latest" ] && want=""
 
-          # 1) resolve target dir (major only) + the commit SHA that holds its sources
+          # 1) locate the right major dir inside the vendored redis-exporter/ tree
+          # (Bitnami uses major-only dirs for redis-exporter, e.g. redis-exporter/1/debian-12)
           if [ -z "$want" ] || [ "$want" = "latest" ]; then
-            dir="$(curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" "${api}/contents/bitnami/${PRODUCT}" \
-              | jq -r '.[] | select(.type=="dir") | .name' | sort -V | tail -1)"
-            sha="main"
-            echo "resolving latest -> dir ${dir} @ main"
+            dir="$(ls -d "${GITHUB_WORKSPACE}/redis-exporter"/[0-9]*/ 2>/dev/null \
+              | xargs -n1 basename | sort -V | tail -1)"
+            echo "using latest vendored dir: ${dir}"
           else
             dir="$(printf '%s' "$want" | cut -d. -f1)"
-            # verify dir exists upstream before spending time searching commit history
-            avail_dirs="$(curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" "${api}/contents/bitnami/${PRODUCT}" \
-              | jq -r '.[] | select(.type=="dir") | .name' | sort -V)"
-            if ! echo "$avail_dirs" | grep -qx "$dir"; then
-              echo "::error::dir '${dir}' not found upstream for ${PRODUCT}."
-              echo "::error::Available dirs: $(echo "$avail_dirs" | tr '\n' ' ')"
-              echo "::error::Run the 'List available versions' workflow for exact version numbers."
-              exit 1
-            fi
-            sha=""
-            for p in $(seq 1 10); do
-              page="$(curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" \
-                "${api}/commits?path=bitnami/${PRODUCT}/${dir}/debian-12/Dockerfile&per_page=100&page=${p}")"
-              [ "$(printf '%s' "$page" | jq 'length')" -gt 0 ] || break
-              sha="$(printf '%s' "$page" \
-                | jq -r --arg v "$want" '.[] | select(.commit.message | contains("Release \($v)-debian")) | .sha' \
-                | head -1)"
-              if [ -n "$sha" ]; then break; fi
-            done
-            if [ -z "$sha" ]; then
-              echo "::error::${PRODUCT} ${want} not found in ${UPSTREAM_REPO} history (searched 10 pages of bitnami/${PRODUCT}/${dir})"
-              exit 1
-            fi
-            echo "resolved ${want} -> dir ${dir} @ ${sha}"
+            echo "using dir ${dir} for requested version ${want}"
           fi
 
-          # 2) fetch just that commit's sources (shallow, blobless, sparse)
-          dest="${RUNNER_TEMP}/bc"
-          rm -rf "$dest"; mkdir -p "$dest"
-          git -C "$dest" init -q
-          git -C "$dest" remote add origin "https://github.com/${UPSTREAM_REPO}.git"
-          git -C "$dest" config extensions.partialClone origin
-          git -C "$dest" fetch -q --depth 1 --filter=blob:none origin "$sha"
-          git -C "$dest" sparse-checkout init --cone
-          git -C "$dest" sparse-checkout set "bitnami/${PRODUCT}/${dir}"
-          git -C "$dest" checkout -q FETCH_HEAD
-          ctx="${dest}/bitnami/${PRODUCT}/${dir}/debian-12"
+          ctx="${GITHUB_WORKSPACE}/redis-exporter/${dir}/debian-12"
           if [ ! -f "${ctx}/Dockerfile" ]; then
-            echo "::error::no debian-12 sources for ${PRODUCT} ${dir} at ${sha}"
+            avail="$(ls -d "${GITHUB_WORKSPACE}/${PRODUCT}"/[0-9]*/ 2>/dev/null | xargs -n1 basename | sort -V | tr '\n' ' ' || true)"
+            echo "::error::no vendored sources at ${PRODUCT}/${dir}/debian-12/Dockerfile"
+            echo "::error::Available vendored dirs: ${avail:-none} — merge a sync-${PRODUCT} PR first."
             exit 1
           fi
 
-          # 3) derive build args from that version's own Dockerfile
+          # 2) derive build args from the vendored Dockerfile (no upstream API calls)
           ver="$(grep -oE 'image\.version="[0-9][^"]*"' "${ctx}/Dockerfile" | head -1 | sed -E 's/.*="([^"]+)"/\1/')"
           pkgs="$(grep -E '^RUN install_packages ' "${ctx}/Dockerfile" | head -1 | sed -E 's/^RUN install_packages //')"
           if [ -z "$ver" ] || [ -z "$pkgs" ]; then
@@ -151,7 +116,13 @@ jobs:
             exit 1
           fi
 
-          # 4) build with our custom top-level Dockerfile, inside the fetched context
+          # warn if the requested version differs from what's vendored (build proceeds with vendored)
+          if [ -n "$want" ] && [ "$want" != "latest" ] && [ "$ver" != "$want" ]; then
+            echo "::warning::requested ${want} but vendored sources contain ${ver} — building ${ver}"
+          fi
+          echo "building ${PRODUCT} ${ver} from vendored sources"
+
+          # 3) stage our custom top-level Dockerfile inside the vendored context
           cp "${GITHUB_WORKSPACE}/Dockerfile.${PRODUCT}" "${ctx}/Dockerfile.build"
 
           {
@@ -182,11 +153,12 @@ jobs:
       - name: Summary
         run: |
           {
-            echo "### Built redis-exporter image"
+            echo "### Built redis-exporter image (vendored sources)"
             echo ""
             echo "**Version:** ${{ steps.meta.outputs.version }}"
             echo "**Packages:** ${{ steps.meta.outputs.packages }}"
             echo "**Platforms:** ${{ inputs.platforms }}"
+            echo "**Source:** vendored \`redis-exporter/\` in this repo (merged sync PR)"
             echo ""
             echo "Tags:"
             echo '```'
