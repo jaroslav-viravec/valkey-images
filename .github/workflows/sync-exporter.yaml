@@ -6,8 +6,8 @@ name: Sync Exporter sources
 
 on:
   schedule:
-    # every 4 hours on the hour
-    - cron: "0 */4 * * *"
+    # # every 4 hours on the hour
+    # - cron: "0 */4 * * *"
   workflow_dispatch: {}
 
 permissions:
