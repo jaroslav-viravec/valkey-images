@@ -6,8 +6,8 @@ name: Sync Valkey sources
 
 on:
   schedule:
-    # ~nightly, off-peak and off the :00 mark (GitHub delays on-the-hour crons)
-    - cron: "17 2 * * *"
+    # every 4 hours on the hour
+    - cron: "0 */4 * * *"
   workflow_dispatch: {}
 
 permissions:
