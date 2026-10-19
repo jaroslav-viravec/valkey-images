@@ -55,7 +55,16 @@ jobs:
           set -euo pipefail
           vers="$(grep -rhoE 'image\.version="[0-9][^"]*"' "${LOCAL_PATH}" \
             | sed -E 's/.*="([^"]+)"/\1/' | sort -uV | paste -sd, - || true)"
+          newest="$(grep -rhoE 'image\.version="[0-9][^"]*"' "${LOCAL_PATH}" \
+            | sed -E 's/.*="([^"]+)"/\1/' | sort -uV | tail -1 || true)"
           echo "list=${vers:-unknown}" >> "$GITHUB_OUTPUT"
+          echo "newest=${newest:-unknown}" >> "$GITHUB_OUTPUT"
+          # VERSION = newest vendored version, so it's visible in the repo and PR diff
+          # without opening a Dockerfile. The build workflow still derives the exact
+          # version from each dir's Dockerfile, so these never drift.
+          if [ -n "$newest" ]; then
+            printf '%s\n' "$newest" > "${LOCAL_PATH}/VERSION"
+          fi
 
       - name: Open or update pull request
         run: |
