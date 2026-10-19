@@ -6,7 +6,7 @@ name: Sync Exporter sources
 
 on:
   schedule:
-    # every 1 hours on the hour
+    # every 1 hour on the hour
     - cron: "0 */1 * * *"
   workflow_dispatch: {}
 
