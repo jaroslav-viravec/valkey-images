@@ -1,0 +1,86 @@
+name: List available versions
+
+# Discovery helper — run this before triggering a build workflow to see which
+# versions are available, both vendored in this repo (for v2 build workflows)
+# and published upstream by Bitnami (for v1 build workflows).
+
+on:
+  workflow_dispatch:
+    inputs:
+      product:
+        description: "Product to list versions for"
+        required: true
+        type: choice
+        options:
+          - redis-exporter
+          - valkey
+          - valkey-sentinel
+
+env:
+  UPSTREAM_REPO: bitnami/containers
+
+jobs:
+  list:
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: List vendored versions (v2 workflow)
+        run: |
+          set -euo pipefail
+          product="${{ inputs.product }}"
+          sum="$GITHUB_STEP_SUMMARY"
+
+          echo "## Vendored sources — \`${product}/\` in this repo" >> "$sum"
+          echo "_Use these versions with the **v2** build workflow (recommended)._" >> "$sum"
+          echo "" >> "$sum"
+
+          found=0
+          for dir in $(ls -d "${GITHUB_WORKSPACE}/${product}"/[0-9]*/ 2>/dev/null | sort -V); do
+            dname="$(basename "$dir")"
+            dfile="${dir}debian-12/Dockerfile"
+            [ -f "$dfile" ] || continue
+            ver="$(grep -oE 'image\.version="[0-9][^"]*"' "$dfile" | head -1 | sed -E 's/.*="([^"]+)"/\1/')"
+            [ -n "$ver" ] || continue
+            if [ "$found" -eq 0 ]; then
+              echo "| Dir | Exact version |" >> "$sum"
+              echo "|-----|--------------|" >> "$sum"
+            fi
+            echo "| \`${dname}\` | \`${ver}\` |" >> "$sum"
+            found=1
+          done
+
+          if [ "$found" -eq 0 ]; then
+            echo "> **No vendored sources found.** Merge a \`sync-${product}\` PR first." >> "$sum"
+          fi
+          echo "" >> "$sum"
+
+      - name: List upstream versions (v1 workflow)
+        run: |
+          set -euo pipefail
+          product="${{ inputs.product }}"
+          api="https://api.github.com/repos/${UPSTREAM_REPO}"
+          sum="$GITHUB_STEP_SUMMARY"
+
+          echo "## Upstream — \`bitnami/containers/bitnami/${product}\`" >> "$sum"
+          echo "_Use these versions with the **v1** build workflow (fetches from upstream at build time)._" >> "$sum"
+          echo "" >> "$sum"
+          echo "| Dir | Latest version |" >> "$sum"
+          echo "|-----|---------------|" >> "$sum"
+
+          dirs="$(curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" \
+            "${api}/contents/bitnami/${product}" \
+            | jq -r '.[] | select(.type=="dir") | .name' | sort -V)"
+
+          for dir in $dirs; do
+            ver="$(curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" \
+              "${api}/contents/bitnami/${product}/${dir}/debian-12/Dockerfile" \
+              | jq -r '.content // empty' | base64 -d \
+              | grep -oE 'image\.version="[0-9][^"]*"' | head -1 \
+              | sed -E 's/.*="([^"]+)"/\1/' 2>/dev/null || echo 'unknown')"
+            echo "| \`${dir}\` | \`${ver}\` |" >> "$sum"
+          done
+          echo "" >> "$sum"

@@ -56,6 +56,26 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Show available vendored versions
+        run: |
+          set -euo pipefail
+          sum="$GITHUB_STEP_SUMMARY"
+          echo "### Available vendored versions for \`${PRODUCT}\`" >> "$sum"
+          echo "_Tip: run the **List available versions** workflow to see upstream options too._" >> "$sum"
+          echo "" >> "$sum"
+          found=0
+          for dir in $(ls -d "${GITHUB_WORKSPACE}/${PRODUCT}"/[0-9]*/ 2>/dev/null | sort -V); do
+            dname="$(basename "$dir")"
+            dfile="${dir}debian-12/Dockerfile"
+            [ -f "$dfile" ] || continue
+            ver="$(grep -oE 'image\.version="[0-9][^"]*"' "$dfile" | head -1 | sed -E 's/.*="([^"]+)"/\1/')"
+            [ -n "$ver" ] || continue
+            echo "- \`${ver}\` (dir \`${dname}\`)" >> "$sum"
+            found=1
+          done
+          [ "$found" -eq 1 ] || echo "> No vendored sources found — merge a \`sync-${PRODUCT}\` PR first." >> "$sum"
+          echo "" >> "$sum"
+
       - name: Resolve version and derive build args from vendored sources
         id: meta
         run: |
@@ -77,8 +97,9 @@ jobs:
 
           ctx="${GITHUB_WORKSPACE}/redis-exporter/${dir}/debian-12"
           if [ ! -f "${ctx}/Dockerfile" ]; then
-            echo "::error::no vendored sources at redis-exporter/${dir}/debian-12/Dockerfile"
-            echo "::error::Merge a sync-exporter PR first, then re-run this workflow."
+            avail="$(ls -d "${GITHUB_WORKSPACE}/${PRODUCT}"/[0-9]*/ 2>/dev/null | xargs -n1 basename | sort -V | tr '\n' ' ' || true)"
+            echo "::error::no vendored sources at ${PRODUCT}/${dir}/debian-12/Dockerfile"
+            echo "::error::Available vendored dirs: ${avail:-none} — merge a sync-${PRODUCT} PR first."
             exit 1
           fi
 

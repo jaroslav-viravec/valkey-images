@@ -59,6 +59,29 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Show available upstream versions
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          api="https://api.github.com/repos/${UPSTREAM_REPO}"
+          sum="$GITHUB_STEP_SUMMARY"
+          echo "### Available upstream versions for \`${PRODUCT}\`" >> "$sum"
+          echo "_Tip: run the **List available versions** workflow for a full view including vendored sources._" >> "$sum"
+          echo "" >> "$sum"
+          dirs="$(curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" \
+            "${api}/contents/bitnami/${PRODUCT}" \
+            | jq -r '.[] | select(.type=="dir") | .name' | sort -V)"
+          for dir in $dirs; do
+            ver="$(curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" \
+              "${api}/contents/bitnami/${PRODUCT}/${dir}/debian-12/Dockerfile" \
+              | jq -r '.content // empty' | base64 -d \
+              | grep -oE 'image\.version="[0-9][^"]*"' | head -1 \
+              | sed -E 's/.*="([^"]+)"/\1/' 2>/dev/null || echo 'unknown')"
+            echo "- \`${ver}\` (dir \`${dir}\`)" >> "$sum"
+          done
+          echo "" >> "$sum"
+
       - name: Resolve version, fetch sources, derive build args
         id: meta
         env:
@@ -78,6 +101,15 @@ jobs:
             echo "resolving latest -> dir ${dir} @ main"
           else
             dir="$(printf '%s' "$want" | cut -d. -f1)"
+            # verify dir exists upstream before spending time searching commit history
+            avail_dirs="$(curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" "${api}/contents/bitnami/${PRODUCT}" \
+              | jq -r '.[] | select(.type=="dir") | .name' | sort -V)"
+            if ! echo "$avail_dirs" | grep -qx "$dir"; then
+              echo "::error::dir '${dir}' not found upstream for ${PRODUCT}."
+              echo "::error::Available dirs: $(echo "$avail_dirs" | tr '\n' ' ')"
+              echo "::error::Run the 'List available versions' workflow for exact version numbers."
+              exit 1
+            fi
             sha=""
             for p in $(seq 1 10); do
               page="$(curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" \
