@@ -3,8 +3,8 @@ name: Build Valkey
 # Builds the Valkey image from the VENDORED sources already in this repo
 # (valkey/ directory, populated by sync-valkey.yaml and merged via PR).
 #
-# Unlike build-valkey.yaml, this workflow does NOT fetch from upstream — it uses
-# exactly what was reviewed and merged, so build = what was audited.
+# This workflow does NOT fetch from upstream — it uses exactly what was reviewed
+# and merged, so build = what was audited.
 #
 # Intended flow:
 #   1. sync-valkey.yaml detects new upstream version → opens PR with updated sources
@@ -14,13 +14,11 @@ name: Build Valkey
 on:
   workflow_dispatch:
     inputs:
-      valkey_version:
-        description: "Valkey version to build. Run 'Refresh version choices' after merging a sync PR to update this list."
-        required: true
-        type: choice
-        options:  # auto-updated by refresh-version-choices.yaml
-          - "latest"
-          - "8.1.4"
+      version:
+        description: "Vendored version to build, e.g. 8.1.4 (must exist under valkey/). Leave blank to build the newest vendored version automatically."
+        required: false
+        type: string
+        default: ""
       platforms:
         description: "Target platforms (comma-separated)"
         required: true
@@ -65,8 +63,8 @@ jobs:
           set -euo pipefail
           owner="${{ github.repository_owner }}"
           image="${REGISTRY,,}/${owner,,}/${PRODUCT}"
-          want="${{ inputs.valkey_version }}"
-          # "latest" choice means: resolve to newest vendored version
+          want="${{ inputs.version }}"
+          # blank input means: resolve to newest vendored version
           [ "$want" = "latest" ] && want=""
 
           # 1) find the right major.minor dir in vendored sources
