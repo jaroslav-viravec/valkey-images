@@ -1,0 +1,96 @@
+name: PR Check - Valkey
+
+# Gate for sync PRs: proves the valkey image BUILDS from the vendored sources
+# contained in the PR, WITHOUT pushing anything. Runs automatically on any pull
+# request that touches valkey/ sources. This is the "can it build?" check for
+# this product — add it as a required status check on the default branch so a
+# sync PR can only be merged once it builds.
+
+on:
+  pull_request:
+    paths:
+      - "valkey/**"
+      - "Dockerfile.valkey"
+
+permissions:
+  contents: read
+
+env:
+  PRODUCT: valkey
+
+jobs:
+  build-check:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout (PR head)
+        uses: actions/checkout@v7
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Resolve newest vendored version and derive build args
+        id: meta
+        run: |
+          set -euo pipefail
+          # Build the newest vendored dir (valkey uses major.minor dirs, e.g.
+          # valkey/8.1) — that is what a sync PR updates.
+          dir="$(ls -d "${GITHUB_WORKSPACE}/${PRODUCT}"/[0-9]*/ 2>/dev/null \
+            | xargs -n1 basename | sort -V | tail -1)"
+          if [ -z "$dir" ]; then
+            echo "::error::no vendored ${PRODUCT} sources found in this PR"
+            exit 1
+          fi
+
+          ctx="${GITHUB_WORKSPACE}/${PRODUCT}/${dir}/debian-12"
+          if [ ! -f "${ctx}/Dockerfile" ]; then
+            echo "::error::no Dockerfile at ${PRODUCT}/${dir}/debian-12/"
+            exit 1
+          fi
+
+          # Same derivation the release build uses — version comes from the
+          # vendored Dockerfile's image.version label (set by Bitnami).
+          ver="$(grep -oE 'image\.version="[0-9][^"]*"' "${ctx}/Dockerfile" | head -1 | sed -E 's/.*="([^"]+)"/\1/')"
+          wfp="$(grep -oE 'wait-for-port-[0-9][0-9.]*-[0-9]+' "${ctx}/Dockerfile" | head -1 | sed -E 's/^wait-for-port-//')"
+          pkgs="$(grep -E '^RUN install_packages ' "${ctx}/Dockerfile" | head -1 | sed -E 's/^RUN install_packages //')"
+          if [ -z "$ver" ] || [ -z "$wfp" ] || [ -z "$pkgs" ]; then
+            echo "::error::could not derive version/wait-for-port/packages from ${ctx}/Dockerfile"
+            exit 1
+          fi
+          echo "checking build of ${PRODUCT} ${ver} (dir ${dir})"
+
+          cp "${GITHUB_WORKSPACE}/Dockerfile.${PRODUCT}" "${ctx}/Dockerfile.build"
+
+          {
+            echo "version=${ver}"
+            echo "wait_for_port=${wfp}"
+            echo "packages=${pkgs}"
+            echo "context=${ctx}"
+            echo "dockerfile=${ctx}/Dockerfile.build"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Build only (no push)
+        uses: docker/build-push-action@v7
+        with:
+          context: ${{ steps.meta.outputs.context }}
+          file: ${{ steps.meta.outputs.dockerfile }}
+          build-args: |
+            APP_VERSION=${{ steps.meta.outputs.version }}
+            WAIT_FOR_PORT_VERSION=${{ steps.meta.outputs.wait_for_port }}
+            PACKAGES=${{ steps.meta.outputs.packages }}
+          platforms: linux/amd64,linux/arm64
+          push: false
+          cache-from: type=gha,scope=valkey-${{ steps.meta.outputs.version }}
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### PR build check — ${PRODUCT}"
+            echo ""
+            echo "**Version:** ${{ steps.meta.outputs.version }}"
+            echo "**Platforms:** linux/amd64, linux/arm64"
+            echo "**Result:** build-only — no image was pushed."
+          } >> "$GITHUB_STEP_SUMMARY"
