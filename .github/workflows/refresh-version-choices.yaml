@@ -18,7 +18,7 @@ on:
       - "valkey-sentinel/**"
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   refresh:
@@ -26,8 +26,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
-        with:
-          token: ${{ secrets.WORKFLOW_PAT }}
 
       - name: Discover vendored versions
         id: versions
