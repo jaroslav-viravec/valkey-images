@@ -1,4 +1,4 @@
-name: Build Exporter v2
+name: Build Exporter (from vendored sources)
 
 # Builds the Redis Exporter image from the VENDORED sources already in this repo
 # (redis-exporter/ directory, populated by sync-exporter.yaml and merged via PR).

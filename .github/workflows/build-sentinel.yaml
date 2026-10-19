@@ -1,4 +1,4 @@
-name: Build Sentinel
+name: Build Sentinel (from upstream)
 
 # Builds ANY Valkey Sentinel version that exists in bitnami/containers and pushes it to
 # ghcr.io/<owner>/valkey-sentinel:<version>.

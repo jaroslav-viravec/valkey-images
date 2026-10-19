@@ -1,4 +1,4 @@
-name: Build Valkey
+name: Build Valkey (from upstream)
 
 # Builds ANY Valkey version that exists in bitnami/containers and pushes it to
 # ghcr.io/<owner>/valkey:<version>.

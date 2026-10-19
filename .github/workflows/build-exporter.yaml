@@ -1,4 +1,4 @@
-name: Build Exporter
+name: Build Exporter (from upstream)
 
 # Builds ANY Redis Exporter version that exists in bitnami/containers and pushes it to
 # ghcr.io/<owner>/redis-exporter:<version>.
