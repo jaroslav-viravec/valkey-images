@@ -71,12 +71,28 @@ jobs:
           set -euo pipefail
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git checkout -B "${BRANCH}"
+
+          # Stage the freshly-mirrored sources (working tree is on the default branch).
           git add "${LOCAL_PATH}"
+
+          # Nothing differs from the default branch -> already released, nothing to do.
           if git diff --cached --quiet; then
-            echo "No upstream changes for ${LOCAL_PATH}; nothing to do."
+            echo "No upstream changes vs default branch for ${LOCAL_PATH}; nothing to do."
             exit 0
           fi
+
+          # The sync PR branch may already hold exactly these sources from a previous
+          # run. If so, do NOT re-push: a new commit would re-trigger the PR check
+          # (and its maintainer approval) on every scheduled run until the PR merges.
+          if git fetch origin "${BRANCH}" 2>/dev/null; then
+            if git diff --quiet FETCH_HEAD -- "${LOCAL_PATH}"; then
+              echo "Branch ${BRANCH} already contains these sources; PR is up to date, nothing to push."
+              exit 0
+            fi
+          fi
+
+          # Genuine change -> (re)create the sync branch as a single commit and push.
+          git checkout -B "${BRANCH}"
           git commit -m "chore(sync): update ${LOCAL_PATH} sources from ${UPSTREAM_REPO} (${{ steps.versions.outputs.list }})"
           git push -f origin "${BRANCH}"
           body="$(cat <<EOF
